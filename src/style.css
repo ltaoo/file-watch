@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.pointer-events-none {
+  pointer-events: none;
+}
+
+.__a {
+  animation: __a 0.1s;
+}
+@keyframes __a {
+  0% {
+    transform: scale(1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
