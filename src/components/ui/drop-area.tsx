@@ -38,13 +38,13 @@ export function DropArea(props: { store: DragZoneCore } & JSX.HTMLAttributes<HTM
   return (
     <div
       classList={{
-        "overflow-hidden absolute inset-0": true,
-        "outline bg-gray-400 opacity-50": state().hovering,
-        "outline-dashed": !state().hovering,
+        "absolute inset-0": true,
+        "bg-gray-800 opacity-50": state().hovering,
+        "": !state().hovering,
       }}
     >
       <div
-        class="absolute inset-0 flex items-center justify-center cursor-pointer"
+        class="absolute inset-0 flex items-center justify-center"
         style={{ display: state().selected ? "none" : "block" }}
       >
         <div class="p-4 text-center">

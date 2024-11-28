@@ -7,15 +7,15 @@ export const request = request_factory({
     test: "",
     prod: "",
   },
-  process<T>(r: Result<{ code: number | string; msg: string; data: T }>) {
+  process<T>(r: Result<string>) {
     console.log("request result", r);
     if (r.error) {
       return Result.Err(r.error.message);
     }
-    const { code, msg, data } = r.data;
+    const { code, msg, data } = JSON.parse(r.data);
     if (code !== 0) {
       return Result.Err(msg, code, data);
     }
-    return Result.Ok(data);
+    return Result.Ok(data as T);
   },
 });

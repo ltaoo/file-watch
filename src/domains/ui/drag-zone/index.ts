@@ -39,6 +39,11 @@ export class DragZoneCore extends BaseDomain<TheTypesOfEvents> {
       this.onChange(onChange);
     }
   }
+  clear() {
+    this._files = [];
+    this._selected = false;
+    this.emit(Events.StateChange, { ...this.state });
+  }
   /** 开始拖动 */
   handleDragover() {
     this._hovering = true;

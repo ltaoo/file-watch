@@ -3,7 +3,7 @@ import { request } from "@/biz/requests";
 /**
  * 开始监听指定目录
  */
-export function start_watch(dir: string) {
+export function watch_folder(dir: string) {
   return request.post("watch_folder", {
     pathToWatch: dir,
   });
@@ -11,7 +11,7 @@ export function start_watch(dir: string) {
 /**
  * 取消监听指定目录
  */
-export function stop_watch(dir: string) {
+export function stop_watch_folder(dir: string) {
   return request.post("cancel_watch_folder", {
     pathToWatch: dir,
   });
@@ -20,7 +20,7 @@ export function stop_watch(dir: string) {
  * 获取指定路径文件/文件夹信息
  */
 export function fetch_file_profile(dir: string) {
-  return request.post("fetch_file_profile", {
+  return request.post<{ file_type: string }>("fetch_file_profile", {
     path: dir,
   });
 }
