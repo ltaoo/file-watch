@@ -1,0 +1,28 @@
+[package]
+name = "file-watch"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.96"
+description = "Native folder change monitor built with Rust, GPUI and gpuikit"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+async-channel = "2"
+chrono = "0.4"
+gpui = { package = "gpui-unofficial", version = "=1.14.2" }
+gpui_platform = { package = "gpui-platform-gpui-unofficial", version = "=1.14.2", features = ["font-kit"] }
+gpuikit = { version = "=0.9.0", features = ["runtime_shaders"] }
+notify = "8.2"
+rodio = { version = "0.20", default-features = false, features = ["mp3"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+lto = "thin"
+strip = true
+

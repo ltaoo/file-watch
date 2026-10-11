@@ -1,0 +1,197 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.96.1
+
+jobs:
+  prepare:
+    name: Prepare release version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Generate a unique version for this push
+        id: version
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={version}\n")
+              output.write(f"tag=v{version}-build.{os.environ['GITHUB_RUN_NUMBER']}\n")
+          PY
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    env:
+      BUILD_TARGET: ${{ matrix.target }}
+      APP_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      # Keep linker memory and disk use within the hosted runners' limits.
+      CARGO_BUILD_JOBS: 2
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential clang cmake pkg-config libasound2-dev \
+            libfontconfig1-dev libfreetype6-dev libglib2.0-dev libssl-dev \
+            libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libvulkan-dev
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --component clippy
+          rustup default "$RUST_VERSION"
+          rustup target add "$BUILD_TARGET"
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-1.96.1-${{ hashFiles('Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --all-targets --locked --target "$BUILD_TARGET" -- -D warnings
+
+      - name: Run non-GUI tests
+        run: cargo test --locked --target "$BUILD_TARGET"
+
+      - name: Build native executable
+        run: cargo build --release --locked --target "$BUILD_TARGET"
+
+      - name: Package release
+        run: |
+          python scripts/package_release.py \
+            --target "$BUILD_TARGET" \
+            --version "$APP_VERSION" \
+            --release-tag "$RELEASE_TAG"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: file-watch-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: [prepare, build]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: file-watch-*
+          path: dist
+          merge-multiple: true
+
+      - name: Validate assets and generate checksums
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path("dist")
+          tag = os.environ["RELEASE_TAG"]
+          expected = {
+              f"file-watch-{tag}-aarch64-apple-darwin.tar.gz",
+              f"file-watch-{tag}-x86_64-apple-darwin.tar.gz",
+              f"file-watch-{tag}-x86_64-pc-windows-msvc.zip",
+              f"file-watch-{tag}-x86_64-unknown-linux-gnu.tar.gz",
+          }
+          assets = {path.name for path in root.iterdir() if path.is_file()}
+          if assets != expected:
+              raise SystemExit(f"Unexpected release assets: {assets}; expected: {expected}")
+          with (root / "SHA256SUMS").open("w") as output:
+              for name in sorted(expected):
+                  with (root / name).open("rb") as asset:
+                      digest = hashlib.file_digest(asset, "sha256").hexdigest()
+                  output.write(f"{digest}  {name}\n")
+          notes = (
+              f"Rust + GPUI + gpuikit native FileWatch build from `{os.environ['COMMIT_SHA']}`.\n\n"
+              "Downloads: macOS Apple Silicon / Intel (`.app`), Windows x64 (`.exe`), "
+              "Linux x64 (native executable, built on Ubuntu 24.04).\n\n"
+              "SHA-256 checksums are included in `SHA256SUMS`. "
+              "The macOS apps use ad-hoc signatures and are not notarized.\n"
+          )
+          (Path(os.environ["RUNNER_TEMP"]) / "release-notes.md").write_text(notes)
+          PY
+
+      - name: Upload all assets before publishing
+        shell: bash
+        run: |
+          if ! gh release view "$RELEASE_TAG" --repo "$GH_REPO" > /dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$GH_REPO" \
+              --target "$COMMIT_SHA" \
+              --title "FileWatch $RELEASE_TAG" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --draft
+          fi
+          gh release upload "$RELEASE_TAG" dist/* --repo "$GH_REPO" --clobber
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --latest
